@@ -4,7 +4,6 @@ import google.generativeai as genai
 import io
 import time
 import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 import json
 import os
 
