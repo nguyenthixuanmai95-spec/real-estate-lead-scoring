@@ -6,116 +6,186 @@ import time
 import gspread
 import json
 import os
+from google.oauth2 import service_account
 
 # --- CONFIGURATION & STYLING ---
-st.set_page_config(page_title="AI Lead Scoring System", layout="wide")
+st.set_page_config(
+    page_title="MindX AI Lead Scoring - Premium Dashboard",
+    page_icon="💎",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# Premium CSS for Glassmorphism & Modern UI
+# Custom CSS for Premium Look
 st.markdown("""
     <style>
-    .main {
-        background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-    }
+    /* Main Background */
     .stApp {
-        background-color: transparent;
+        background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+        color: #f8fafc;
     }
+    
+    /* Sidebar Styling */
     [data-testid="stSidebar"] {
-        background-color: rgba(255, 255, 255, 0.8);
-        backdrop-filter: blur(10px);
-        border-right: 1px solid rgba(255, 255, 255, 0.2);
+        background-color: rgba(15, 23, 42, 0.95);
+        border-right: 1px solid rgba(255, 255, 255, 0.1);
     }
+    
+    /* Glassmorphism Cards */
     .metric-card {
-        background: white;
-        padding: 20px;
-        border-radius: 15px;
-        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        background: rgba(255, 255, 255, 0.05);
+        backdrop-filter: blur(10px);
+        padding: 25px;
+        border-radius: 20px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
         text-align: center;
-        border-top: 5px solid #4A90E2;
+        transition: transform 0.3s ease;
     }
-    .stButton>button {
-        background-color: #4A90E2;
-        color: white;
-        border-radius: 10px;
-        border: none;
-        padding: 10px 24px;
-        transition: all 0.3s;
+    .metric-card:hover {
+        transform: translateY(-5px);
+        background: rgba(255, 255, 255, 0.08);
+        border-color: rgba(245, 158, 11, 0.5);
     }
-    .stButton>button:hover {
-        background-color: #357ABD;
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px rgba(74, 144, 226, 0.4);
-    }
+    
+    /* Typography */
     h1, h2, h3 {
-        color: #2C3E50;
         font-family: 'Inter', sans-serif;
+        font-weight: 700;
+        letter-spacing: -0.025em;
+    }
+    
+    /* Buttons */
+    .stButton>button {
+        border-radius: 12px;
+        font-weight: 600;
+        padding: 0.6rem 1.5rem;
+        transition: all 0.2s ease;
+        border: none;
+    }
+    
+    /* Tables */
+    .stDataFrame {
+        border-radius: 15px;
+        overflow: hidden;
+    }
+    
+    /* Custom Banner Container */
+    .banner-container {
+        width: 100%;
+        border-radius: 20px;
+        overflow: hidden;
+        margin-bottom: 2rem;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    }
+    
+    /* Metric Values */
+    .metric-value {
+        font-size: 2.5rem;
+        font-weight: 800;
+        margin: 10px 0;
+    }
+    .metric-label {
+        color: #94a3b8;
+        font-size: 0.9rem;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
     }
     </style>
 """, unsafe_allow_html=True)
 
-# --- RULE-BASED SCORING LOGIC (NO API KEY) ---
+# --- UTILITY FUNCTIONS ---
+
+def load_data_securely(url):
+    """
+    Kết nối an toàn tới Google Sheets (Private) qua Service Account.
+    Hỗ trợ cả Streamlit Secrets và file credentials.json cục bộ.
+    """
+    try:
+        scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+        creds_info = None
+        
+        # 1. Kiểm tra trong Streamlit Secrets (Ưu tiên cho Cloud)
+        if "gcp_service_account" in st.secrets:
+            raw_creds = st.secrets["gcp_service_account"]
+            creds_info = json.loads(raw_creds) if isinstance(raw_creds, str) else dict(raw_creds)
+        # 2. Kiểm tra file credentials.json (Dùng cho local development)
+        elif os.path.exists("credentials.json"):
+            with open("credentials.json", "r", encoding="utf-8") as f:
+                creds_info = json.load(f)
+        
+        if creds_info:
+            info_dict = dict(creds_info)
+            # Chuẩn hóa private_key (quan trọng cho PEM format)
+            if 'private_key' in info_dict:
+                pk = str(info_dict['private_key']).replace('\\n', '\n')
+                info_dict['private_key'] = pk
+            
+            creds = service_account.Credentials.from_service_account_info(info_dict, scopes=scope)
+            client = gspread.authorize(creds)
+            
+            # Trích xuất Sheet ID từ URL
+            try:
+                sheet_id = url.split("/d/")[1].split("/")[0]
+                sheet = client.open_by_key(sheet_id).get_worksheet(0)
+                return pd.DataFrame(sheet.get_all_records())
+            except Exception as e:
+                st.sidebar.error(f"Lỗi truy cập Sheet ID: {e}")
+                return None
+        else:
+            # Fallback to public read (if private fails)
+            csv_url = url.replace("/edit?gid=", "/export?format=csv&gid=").split("#")[0]
+            if "/edit" in csv_url and "/export" not in csv_url:
+                csv_url = url.replace("/edit", "/export?format=csv")
+            return pd.read_csv(csv_url)
+            
+    except Exception as e:
+        st.sidebar.warning("⚠️ Đang dùng chế độ Công khai (Public). Vui lòng cấu hình Service Account để bảo mật.")
+        try:
+            csv_url = url.replace("/edit?gid=", "/export?format=csv&gid=").split("#")[0]
+            return pd.read_csv(csv_url)
+        except:
+            st.error(f"❌ Không thể tải dữ liệu: {e}")
+            return None
+
 def rule_based_scoring(df):
     results = []
-    
-    vip_keywords = [
-        "20 tỷ", "tài chính mạnh", "không thành vấn đề", 
-        "Biệt thự đơn lập", "Penthouse", "Shophouse", "Quỹ đất công nghiệp", "Sàn văn phòng diện tích lớn",
-        "Quận 1", "Ven sông", "Vinhomes Ocean Park", "Phú Mỹ Hưng",
-        "Chủ doanh nghiệp", "Nhà đầu tư chuyên nghiệp", "Mua sỉ", "Mua số lượng lớn",
-        "Pháp lý chuẩn", "Sổ hồng riêng", "Gặp trực tiếp chủ đầu tư"
-    ]
-    
-    junk_keywords = [
-        "Nhầm số", "Không có nhu cầu", "Dữ liệu cũ", "Nhầm ngành",
-        "Hỏi giá cho vui", "Chưa có ý định mua", "Thái độ không hợp tác",
-        "Bảo hiểm", "Vay vốn", "Mời chào dịch vụ",
-        "Thuê bao", "Không bắt máy", "Không phản hồi Zalo"
-    ]
+    # Các quy tắc dựa trên file lead_scoring_skill.md
+    vip_keywords = ["20 tỷ", "tài chính mạnh", "không thành vấn đề", "biệt thự", "penthouse", "shophouse", "vinhomes", "phú mỹ hưng", "chủ doanh nghiệp", "mua sỉ"]
+    junk_keywords = ["nhầm số", "không có nhu cầu", "dữ liệu cũ", "hỏi giá cho vui", "bảo hiểm", "vay vốn", "thuê bao"]
 
     for idx, row in df.iterrows():
         score = 0
         reasons = []
         desc = str(row['nhu_cau_mo_ta']).lower()
         
-        # Check VIP
+        # Logic VIP
         for kw in vip_keywords:
-            if kw.lower() in desc:
+            if kw in desc:
                 score += 50
-                reasons.append(f"Khớp từ khóa VIP: {kw}")
-                break # Only add 50 once for VIP status usually, or could be cumulative
-        
-        # Check Junk
-        for kw in junk_keywords:
-            if kw.lower() in desc:
-                score -= 50
-                reasons.append(f"Khớp dấu hiệu Rác: {kw}")
+                reasons.append(f"VIP Keyword: {kw}")
                 break
         
-        # Check Unrealistic (Simple logic)
-        if "quận 1" in desc and ("1 tỷ" in desc or "2 tỷ" in desc):
-            score -= 50
-            reasons.append("Yêu cầu phi thực tế (Quận 1 giá rẻ)")
-
-        # Classification
-        if score >= 50:
-            phan_loai = "VIP"
-        elif score < 0:
-            phan_loai = "Rác"
-        else:
-            phan_loai = "Tiềm năng"
-            
+        # Logic Junk
+        for kw in junk_keywords:
+            if kw in desc:
+                score -= 50
+                reasons.append(f"Junk Sign: {kw}")
+                break
+        
+        # Phân loại
+        phan_loai = "VIP" if score >= 50 else ("Rác" if score < 0 else "Tiềm năng")
+        
         results.append({
             "diem_tiem_nang": score,
             "phan_loai": phan_loai,
-            "ly_do_cham_diem": "; ".join(reasons) if reasons else "Khách hàng tầm trung"
+            "ly_do_cham_diem": "; ".join(reasons) if reasons else "Khách hàng tiêu chuẩn"
         })
         
-    res_df = pd.DataFrame(results)
-    return pd.concat([df, res_df], axis=1)
+    return pd.concat([df, pd.DataFrame(results)], axis=1)
 
-# --- AI SCORING LOGIC ---
 def get_ai_score(api_key, leads_df, skill_content):
     if not api_key:
-        st.error("Vui lòng nhập Gemini API Key trong Sidebar!")
+        st.error("Vui lòng nhập Gemini API Key!")
         return None
     
     genai.configure(api_key=api_key)
@@ -126,203 +196,165 @@ def get_ai_score(api_key, leads_df, skill_content):
     status_text = st.empty()
     
     for idx, row in leads_df.iterrows():
-        status_text.text(f"Đang xử lý Lead {idx+1}/{len(leads_df)}: {row['ten_khach']}")
-        
-        prompt = f"""
-        Dựa trên bộ quy tắc chấm điểm sau đây:
-        {skill_content}
-        
-        Hãy phân tích nội dung nhu cầu của khách hàng sau:
-        Tên: {row['ten_khach']}
-        Mô tả nhu cầu: {row['nhu_cau_mo_ta']}
-        
-        Trả về kết quả dưới dạng JSON duy nhất với các trường:
-        - "diem_tiem_nang": (số nguyên)
-        - "phan_loai": (VIP, Tiềm năng, Rác)
-        - "ly_do_cham_diem": (chuỗi giải thích ngắn gọn)
-        
-        Lưu ý: Chỉ trả về JSON, không kèm văn bản khác.
-        """
+        status_text.text(f"🤖 AI đang phân tích Lead {idx+1}/{len(leads_df)}...")
+        prompt = f"Dựa trên quy tắc:\n{skill_content}\n\nPhân tích Lead:\n{row['ten_khach']} - {row['nhu_cau_mo_ta']}\n\nTrả về JSON: diem_tiem_nang (int), phan_loai (VIP/Tiềm năng/Rác), ly_do_cham_diem (string). Chỉ JSON."
         
         try:
             response = model.generate_content(prompt)
-            # Simple cleaning of response text if needed
             res_text = response.text.replace("```json", "").replace("```", "").strip()
-            import json
-            res_json = json.loads(res_text)
-            results.append(res_json)
-        except Exception as e:
-            results.append({
-                "diem_tiem_nang": 0,
-                "phan_loai": "Lỗi",
-                "ly_do_cham_diem": f"Lỗi xử lý: {str(e)}"
-            })
+            results.append(json.loads(res_text))
+        except:
+            results.append({"diem_tiem_nang": 0, "phan_loai": "Lỗi", "ly_do_cham_diem": "Lỗi AI"})
         
         progress_bar.progress((idx + 1) / len(leads_df))
-        time.sleep(0.5) # Avoid rate limits
-        
+    
     progress_bar.empty()
     status_text.empty()
-    
-    res_df = pd.DataFrame(results)
-    return pd.concat([leads_df, res_df], axis=1)
+    return pd.concat([leads_df, pd.DataFrame(results)], axis=1)
 
-# --- MAIN APP ---
+# --- MAIN APPLICATION ---
+
 def main():
-    # 1. Header & Logo chuyên nghiệp
-    col_logo, col_title = st.columns([1, 4])
-    with col_logo:
-        st.image("https://img.icons8.com/fluency/144/real-estate.png", width=100)
-    with col_title:
-        st.markdown('<h1 style="color: #E11D48; margin-top: 10px;">🏘️ Hệ thống Lead Scoring & Automation</h1>', unsafe_allow_html=True)
-        st.markdown('<p style="font-size: 1.1rem; color: #64748b;">Giải pháp phân loại khách hàng thông minh chuẩn MindX Standard</p>', unsafe_allow_html=True)
+    # Banner & Header
+    # Lấy đường dẫn banner đã generate (giả sử file này tồn tại trong folder)
+    banner_path = next((f for f in os.listdir(".") if "lead_scoring_banner" in f), None)
+    if banner_path:
+        st.image(banner_path, use_container_width=True)
+    else:
+        st.markdown('<div style="height: 150px; background: linear-gradient(90deg, #1e293b, #4f46e5); border-radius: 20px; display: flex; align-items: center; justify-content: center;"><h1 style="color: white; margin: 0;">💎 AI LEAD SCORING SYSTEM</h1></div>', unsafe_allow_html=True)
 
-    # --- Sidebar ---
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # Sidebar
     with st.sidebar:
-        st.image("https://img.icons8.com/fluency/96/artificial-intelligence.png", width=60)
-        st.header("⚙️ Cấu hình")
+        st.title("⚙️ Cấu hình Hệ thống")
+        gsheet_url = st.text_input("🔗 Link Google Sheet (Private)", "https://docs.google.com/spreadsheets/d/1StcpiSKHKYevnM2Jjqt_3KH90vld-ykSiMaRwteju6w/edit#gid=0")
         
-        gsheet_url = st.text_input("🔗 Google Sheet URL", "https://docs.google.com/spreadsheets/d/1StcpiSKHKYevnM2Jjqt_3KH90vld-ykSiMaRwteju6w/edit?gid=0#gid=0")
-        
-        with st.expander("🛠️ Cài đặt nâng cao (AI Gemini)"):
-            api_key = st.text_input("Gemini API Key", type="password", help="Chỉ điền nếu muốn dùng AI phân tích sâu hơn")
+        with st.expander("🔑 AI Settings"):
+            api_key = st.text_input("Gemini API Key", type="password")
             
         st.divider()
-        st.info("💡 **Mẹo:** Hệ thống mặc định dùng bộ quy tắc nghiệp vụ (Rule-based) để chấm điểm ngay lập tức.")
-        if st.button("🔄 Tải lại dữ liệu", use_container_width=True):
-            st.session_state.pop('raw_data', None)
-            st.session_state.pop('scored_data', None)
+        st.markdown("### 🛡️ Trạng thái bảo mật")
+        if "gcp_service_account" in st.secrets or os.path.exists("credentials.json"):
+            st.success("✅ Đã kết nối Service Account")
+        else:
+            st.warning("⚠️ Chế độ Công khai (Kém bảo mật)")
+            st.info("Để dùng Sheet Riêng tư: \n1. Tạo Service Account trên Google Cloud\n2. Share Sheet với mail service account\n3. Thêm JSON vào Secrets.")
+
+        if st.button("🔄 Làm mới dữ liệu", use_container_width=True):
+            st.session_state.clear()
             st.rerun()
 
-    # --- Data Loading Logic ---
-    def load_data_from_gsheet(url):
-        try:
-            from google.oauth2 import service_account
-            scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
-            creds_info = None
-            if "gcp_service_account" in st.secrets:
-                raw_creds = st.secrets["gcp_service_account"]
-                creds_info = json.loads(raw_creds) if isinstance(raw_creds, str) else dict(raw_creds)
-            elif os.path.exists("credentials.json"):
-                with open("credentials.json", "r") as f:
-                    creds_info = json.load(f)
-            
-            if creds_info:
-                info_dict = dict(creds_info)
-                if 'private_key' in info_dict:
-                    pk = str(info_dict['private_key']).strip()
-                    # Loại bỏ dấu nháy kép thừa ở đầu/cuối nếu có
-                    if pk.startswith('"') and pk.endswith('"'):
-                        pk = pk[1:-1]
-                    # Fix lỗi ký tự xuống dòng (quan trọng nhất cho PEM)
-                    pk = pk.replace('\\n', '\n')
-                    # Đảm bảo không có khoảng trắng thừa ở từng dòng
-                    pk = "\n".join([line.strip() for line in pk.split('\n')])
-                    info_dict['private_key'] = pk
-                
-                creds = service_account.Credentials.from_service_account_info(info_dict, scopes=scope)
-                client = gspread.authorize(creds)
-                sheet_id = url.split("/d/")[1].split("/")[0]
-                sheet = client.open_by_key(sheet_id).get_worksheet(0)
-                return pd.DataFrame(sheet.get_all_records())
-        except Exception as e:
-            st.sidebar.warning(f"Xác thực Service Account thất bại: {e}")
+    # Data Loading
+    if 'raw_data' not in st.session_state:
+        with st.spinner("Đang tải dữ liệu từ Google Sheets..."):
+            df = load_data_securely(gsheet_url)
+            if df is not None:
+                st.session_state['raw_data'] = df
+            else:
+                st.stop()
 
-        try:
-            csv_url = url.replace("/edit?gid=", "/export?format=csv&gid=").split("#")[0]
-            if "/edit" in csv_url and "/export" not in csv_url:
-                csv_url = url.replace("/edit", "/export?format=csv")
-            return pd.read_csv(csv_url)
-        except Exception as e:
-            st.error(f"❌ Lỗi kết nối: {e}")
-            return None
+    df = st.session_state['raw_data']
 
-    if gsheet_url and 'raw_data' not in st.session_state:
-        df = load_data_from_gsheet(gsheet_url)
-        if df is not None:
-            st.session_state['raw_data'] = df
-
-    # --- Application Content ---
-    if 'raw_data' in st.session_state:
-        df = st.session_state['raw_data']
+    # --- DASHBOARD SECTION ---
+    st.markdown("## 📊 Lead Insights Dashboard")
+    
+    # Calculate Metrics
+    total_leads = len(df)
+    scored_df = st.session_state.get('scored_data', None)
+    
+    c1, c2, c3, c4 = st.columns(4)
+    
+    with c1:
+        st.markdown(f"""<div class="metric-card"><div class="metric-label">Tổng Lead</div><div class="metric-value" style="color: #60a5fa;">{total_leads}</div></div>""", unsafe_allow_html=True)
+    
+    if scored_df is not None:
+        vip_count = len(scored_df[scored_df['phan_loai'] == 'VIP'])
+        pot_count = len(scored_df[scored_df['phan_loai'] == 'Tiềm năng'])
+        junk_count = len(scored_df[scored_df['phan_loai'] == 'Rác'])
         
-        # 2. Dashboard Metrics (st.metric)
-        st.divider()
-        m1, m2, m3 = st.columns(3)
-        m1.metric("📊 Tổng Lead", f"{len(df)} KH")
+        with c2:
+            st.markdown(f"""<div class="metric-card"><div class="metric-label">Khách VIP</div><div class="metric-value" style="color: #fbbf24;">{vip_count}</div></div>""", unsafe_allow_html=True)
+        with c3:
+            st.markdown(f"""<div class="metric-card"><div class="metric-label">Tiềm năng</div><div class="metric-value" style="color: #34d399;">{pot_count}</div></div>""", unsafe_allow_html=True)
+        with c4:
+            st.markdown(f"""<div class="metric-card"><div class="metric-label">Khách Rác</div><div class="metric-value" style="color: #f87171;">{junk_count}</div></div>""", unsafe_allow_html=True)
+    else:
+        with c2: st.markdown(f"""<div class="metric-card"><div class="metric-label">Khách VIP</div><div class="metric-value">--</div></div>""", unsafe_allow_html=True)
+        with c3: st.markdown(f"""<div class="metric-card"><div class="metric-label">Tiềm năng</div><div class="metric-value">--</div></div>""", unsafe_allow_html=True)
+        with c4: st.markdown(f"""<div class="metric-card"><div class="metric-label">Khách Rác</div><div class="metric-value">--</div></div>""", unsafe_allow_html=True)
+
+    st.markdown("<br>", unsafe_allow_html=True)
+
+    # --- TABS FOR WORKFLOW ---
+    tab1, tab2, tab3 = st.tabs(["📥 Dữ liệu thô", "⚡ Xử lý thông minh", "📋 Báo cáo & Xuất file"])
+
+    with tab1:
+        st.markdown("### 📄 Danh sách khách hàng mới cập nhật")
+        st.dataframe(df, use_container_width=True)
+
+    with tab2:
+        st.markdown("### 🧠 Lựa chọn phương thức phân tích")
+        col_btn1, col_btn2 = st.columns(2)
         
-        if 'scored_data' in st.session_state:
-            scored = st.session_state['scored_data']
-            vip = len(scored[scored['phan_loai'] == 'VIP'])
-            rac = len(scored[scored['phan_loai'] == 'Rác'])
-            m2.metric("💎 Khách VIP (+50đ)", f"{vip} KH", delta=f"{vip/len(df)*100:.1f}%")
-            m3.metric("🗑️ Khách Rác (-50đ)", f"{rac} KH", delta=f"-{rac/len(df)*100:.1f}%", delta_color="inverse")
-        else:
-            m2.metric("💎 Khách VIP (+50đ)", "0 KH")
-            m3.metric("🗑️ Khách Rác (-50đ)", "0 KH")
-
-        st.write("### 📋 Danh sách khách hàng mới")
-        st.dataframe(df, use_container_width=True, height=250)
-
-        # 3. Action Buttons
-        st.write("#### ⚡ Thao tác xử lý")
-        btn1, btn2 = st.columns(2)
-        with btn1:
-            if st.button("🔥 CHẤM ĐIỂM QUY TẮC (NHANH)", use_container_width=True):
+        with col_btn1:
+            st.info("Phù hợp cho dữ liệu lớn, cần kết quả tức thì dựa trên từ khóa cố định.")
+            if st.button("🔥 CHẤM ĐIỂM QUY TẮC (FAST)", use_container_width=True):
                 st.session_state['scored_data'] = rule_based_scoring(df)
                 st.rerun()
-        with btn2:
-            if st.button("🤖 CHẤM ĐIỂM AI CHUYÊN SÂU", use_container_width=True):
+                
+        with col_btn2:
+            st.info("Sử dụng AI Gemini 1.5 để hiểu sâu ngữ cảnh và nhu cầu thực tế.")
+            if st.button("🤖 CHẤM ĐIỂM AI (ADVANCED)", use_container_width=True):
                 if api_key:
                     with open("lead_scoring_skill.md", "r", encoding="utf-8") as f:
                         skill = f.read()
-                    scored = get_ai_score(api_key, df, skill)
-                    if scored is not None:
-                        st.session_state['scored_data'] = scored
-                        st.rerun()
+                    st.session_state['scored_data'] = get_ai_score(api_key, df, skill)
+                    st.rerun()
                 else:
-                    st.warning("⚠️ Vui lòng nhập API Key để dùng AI.")
+                    st.error("Vui lòng nhập API Key ở Sidebar!")
 
-    # --- Results & Review ---
-    if 'scored_data' in st.session_state:
-        st.divider()
-        st.write("### 🏆 BẢNG TỔNG KẾT KIỂM TRA (AUDIT)")
-        st.caption("Bạn có thể chỉnh sửa trực tiếp để điều chỉnh kết quả (Human-in-the-loop).")
-        
-        edited_df = st.data_editor(
-            st.session_state['scored_data'],
-            use_container_width=True,
-            num_rows="dynamic",
-            column_config={
-                "diem_tiem_nang": st.column_config.NumberColumn("Điểm", format="%d"),
-                "phan_loai": st.column_config.SelectboxColumn("Phân loại", options=["VIP", "Tiềm năng", "Rác"]),
-                "ly_do_cham_diem": st.column_config.TextColumn("Lý do/Ghi chú", width="large")
-            }
-        )
-        st.session_state['scored_data'] = edited_df
-
-        # --- Statistics & Export ---
-        st.write("#### 📊 Thống kê & Báo cáo")
-        c_stat, c_export = st.columns([2, 1])
-        with c_stat:
-            summary = edited_df['phan_loai'].value_counts()
-            st.bar_chart(summary)
-        with c_export:
-            st.write("#### 📤 Xuất dữ liệu")
-            output = io.BytesIO()
-            with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                edited_df.to_excel(writer, index=False, sheet_name='Bao_cao_Lead_Scoring')
-            st.download_button(
-                label="📥 TẢI FILE EXCEL BÀN GIAO (.xlsx)",
-                data=output.getvalue(),
-                file_name="Bao_cao_Lead_Scoring_BDS.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
+    with tab3:
+        if scored_df is not None:
+            st.markdown("### 🏆 Kết quả phân loại & Audit")
+            
+            # Interactive Editor
+            edited_df = st.data_editor(
+                scored_df,
+                use_container_width=True,
+                column_config={
+                    "diem_tiem_nang": st.column_config.NumberColumn("Điểm", format="%d"),
+                    "phan_loai": st.column_config.SelectboxColumn("Loại", options=["VIP", "Tiềm năng", "Rác"]),
+                    "ly_do_cham_diem": st.column_config.TextColumn("Lý do chi tiết", width="large")
+                }
             )
-            st.success("✅ File sẵn sàng bàn giao!")
+            st.session_state['scored_data'] = edited_df
 
-    else:
-        st.info("Vui lòng tải dữ liệu và chạy AI để bắt đầu.")
+            st.divider()
+            
+            # Export Logic
+            col_exp1, col_exp2 = st.columns([2, 1])
+            with col_exp1:
+                # Simple Bar Chart for distribution
+                dist = edited_df['phan_loai'].value_counts()
+                st.bar_chart(dist)
+            
+            with col_exp2:
+                st.markdown("#### 📥 Xuất báo cáo chuyên nghiệp")
+                output = io.BytesIO()
+                with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                    edited_df.to_excel(writer, index=False, sheet_name='LeadScoringReport')
+                
+                st.download_button(
+                    label="📥 Tải File Excel (.xlsx)",
+                    data=output.getvalue(),
+                    file_name="Lead_Scoring_Premium_Report.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
+                st.success("Dữ liệu đã sẵn sàng để bàn giao cho Sales!")
+        else:
+            st.info("Chưa có dữ liệu đã chấm điểm. Vui lòng thực hiện ở tab 'Xử lý thông minh'.")
 
 if __name__ == "__main__":
     main()
