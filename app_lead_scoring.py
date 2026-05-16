@@ -208,7 +208,18 @@ def main():
                     creds_info = json.load(f)
             
             if creds_info:
-                info_dict = {k: str(v).replace('\\n', '\n') if k == 'private_key' else v for k, v in creds_info.items()}
+                info_dict = dict(creds_info)
+                if 'private_key' in info_dict:
+                    pk = str(info_dict['private_key']).strip()
+                    # Loại bỏ dấu nháy kép thừa ở đầu/cuối nếu có
+                    if pk.startswith('"') and pk.endswith('"'):
+                        pk = pk[1:-1]
+                    # Fix lỗi ký tự xuống dòng (quan trọng nhất cho PEM)
+                    pk = pk.replace('\\n', '\n')
+                    # Đảm bảo không có khoảng trắng thừa ở từng dòng
+                    pk = "\n".join([line.strip() for line in pk.split('\n')])
+                    info_dict['private_key'] = pk
+                
                 creds = service_account.Credentials.from_service_account_info(info_dict, scopes=scope)
                 client = gspread.authorize(creds)
                 sheet_id = url.split("/d/")[1].split("/")[0]
