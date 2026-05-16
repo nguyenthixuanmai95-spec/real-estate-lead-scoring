@@ -118,6 +118,12 @@ def load_data_securely(url):
             # Chuẩn hóa private_key (quan trọng cho PEM format)
             if 'private_key' in info_dict:
                 pk = str(info_dict['private_key']).replace('\\n', '\n')
+                # Đảm bảo định dạng PEM chuẩn
+                pk = pk.strip()
+                if "-----BEGIN PRIVATE KEY-----" not in pk:
+                    pk = "-----BEGIN PRIVATE KEY-----\n" + pk
+                if "-----END PRIVATE KEY-----" not in pk:
+                    pk = pk + "\n-----END PRIVATE KEY-----"
                 info_dict['private_key'] = pk
             
             creds = service_account.Credentials.from_service_account_info(info_dict, scopes=scope)
@@ -129,23 +135,15 @@ def load_data_securely(url):
                 sheet = client.open_by_key(sheet_id).get_worksheet(0)
                 return pd.DataFrame(sheet.get_all_records())
             except Exception as e:
-                st.sidebar.error(f"Lỗi truy cập Sheet ID: {e}")
+                st.sidebar.error(f"❌ Lỗi truy cập Sheet ID: {e}")
                 return None
         else:
-            # Fallback to public read (if private fails)
-            csv_url = url.replace("/edit?gid=", "/export?format=csv&gid=").split("#")[0]
-            if "/edit" in csv_url and "/export" not in csv_url:
-                csv_url = url.replace("/edit", "/export?format=csv")
-            return pd.read_csv(csv_url)
+            st.sidebar.warning("⚠️ Không tìm thấy cấu hình Service Account.")
+            return None
             
     except Exception as e:
-        st.sidebar.warning("⚠️ Đang dùng chế độ Công khai (Public). Vui lòng cấu hình Service Account để bảo mật.")
-        try:
-            csv_url = url.replace("/edit?gid=", "/export?format=csv&gid=").split("#")[0]
-            return pd.read_csv(csv_url)
-        except:
-            st.error(f"❌ Không thể tải dữ liệu: {e}")
-            return None
+        st.sidebar.error(f"❌ Lỗi xác thực Service Account: {e}")
+        return None
 
 def rule_based_scoring(df):
     results = []
