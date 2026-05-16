@@ -3,6 +3,10 @@ import pandas as pd
 import google.generativeai as genai
 import io
 import time
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+import json
+import os
 
 # --- CONFIGURATION & STYLING ---
 st.set_page_config(page_title="AI Lead Scoring System", layout="wide")
@@ -183,18 +187,45 @@ def main():
         st.info("💡 **Mẹo:** Hệ thống mặc định sử dụng bộ quy tắc nghiệp vụ (Rule-based) để chấm điểm ngay lập tức mà không cần API Key.")
 
     # --- Data Loading Logic ---
-    if gsheet_url:
+    def load_data_from_gsheet(url):
+        # 1. Thử dùng Service Account (gspread) - Bảo mật và ổn định nhất
         try:
-            # Tự động tải dữ liệu khi có URL
-            csv_url = gsheet_url.replace("/edit?gid=", "/export?format=csv&gid=").split("#")[0]
-            if "/edit" in csv_url and "/export" not in csv_url:
-                csv_url = gsheet_url.replace("/edit", "/export?format=csv")
+            scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
+            creds = None
             
-            if 'raw_data' not in st.session_state:
-                df = pd.read_csv(csv_url)
-                st.session_state['raw_data'] = df
+            # Kiểm tra trong Streamlit Secrets (cho Cloud) hoặc file local
+            if "gcp_service_account" in st.secrets:
+                creds_info = json.loads(st.secrets["gcp_service_account"])
+                creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
+            elif os.path.exists("credentials.json"):
+                creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+            
+            if creds:
+                client = gspread.authorize(creds)
+                # Lấy ID từ URL
+                sheet_id = url.split("/d/")[1].split("/")[0]
+                sheet = client.open_by_key(sheet_id).sheet1
+                data = sheet.get_all_records()
+                return pd.DataFrame(data)
         except Exception as e:
-            st.error(f"⚠️ Lỗi kết nối Google Sheets: {e}")
+            st.sidebar.warning(f"⚠️ Xác thực Service Account thất bại: {e}")
+
+        # 2. Fallback: Thử dùng URL công khai (CSV export)
+        try:
+            csv_url = url.replace("/edit?gid=", "/export?format=csv&gid=").split("#")[0]
+            if "/edit" in csv_url and "/export" not in csv_url:
+                csv_url = url.replace("/edit", "/export?format=csv")
+            return pd.read_csv(csv_url)
+        except Exception as e:
+            st.error(f"❌ Lỗi kết nối Google Sheets: {e}")
+            st.info("💡 **Gợi ý:** Hãy chắc chắn bạn đã 'Chia sẻ' (Share) file Google Sheet cho Email Robot trong file credentials.json với quyền 'Người xem' (Viewer).")
+            return None
+
+    if gsheet_url:
+        if 'raw_data' not in st.session_state:
+            df = load_data_from_gsheet(gsheet_url)
+            if df is not None:
+                st.session_state['raw_data'] = df
 
     # --- Application Content ---
     if 'raw_data' in st.session_state:
