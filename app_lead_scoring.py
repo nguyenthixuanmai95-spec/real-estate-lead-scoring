@@ -188,21 +188,30 @@ def main():
 
     # --- Data Loading Logic ---
     def load_data_from_gsheet(url):
-        # 1. Thử dùng Service Account (gspread) - Bảo mật và ổn định nhất
+        # 1. Thử dùng Service Account (gspread + google-auth)
         try:
-            scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-            creds = None
+            from google.oauth2 import service_account
             
-            # Kiểm tra trong Streamlit Secrets (cho Cloud) hoặc file local
+            scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+            creds_info = None
+            
+            # Ưu tiên lấy từ Secrets (cho Cloud)
             if "gcp_service_account" in st.secrets:
                 creds_info = json.loads(st.secrets["gcp_service_account"])
-                creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_info, scope)
+            # Fallback lấy từ file local
             elif os.path.exists("credentials.json"):
-                creds = ServiceAccountCredentials.from_json_keyfile_name("credentials.json", scope)
+                with open("credentials.json", "r") as f:
+                    creds_info = json.load(f)
             
-            if creds:
+            if creds_info:
+                # Fix lỗi định dạng private_key phổ biến
+                if 'private_key' in creds_info:
+                    creds_info['private_key'] = creds_info['private_key'].replace('\\n', '\n')
+                
+                creds = service_account.Credentials.from_service_account_info(creds_info, scopes=scope)
                 client = gspread.authorize(creds)
-                # Lấy ID từ URL
+                
+                # Trích xuất ID từ URL
                 sheet_id = url.split("/d/")[1].split("/")[0]
                 sheet = client.open_by_key(sheet_id).sheet1
                 data = sheet.get_all_records()
@@ -218,14 +227,18 @@ def main():
             return pd.read_csv(csv_url)
         except Exception as e:
             st.error(f"❌ Lỗi kết nối Google Sheets: {e}")
-            st.info("💡 **Gợi ý:** Hãy chắc chắn bạn đã 'Chia sẻ' (Share) file Google Sheet cho Email Robot trong file credentials.json với quyền 'Người xem' (Viewer).")
+            st.info("💡 **Hướng dẫn:**\n1. Hãy đảm bảo đã Share quyền **Viewer** cho email robot: `id-lead-scoring-robot-302@plenary-charge-496514-e0.iam.gserviceaccount.com` \n2. Hoặc hãy chỉnh chế độ của Google Sheet sang: **'Bất kỳ ai có đường liên kết đều có thể xem'** (Anyone with link can view).")
             return None
 
+    # Control loading via session state and buttons
     if gsheet_url:
-        if 'raw_data' not in st.session_state:
-            df = load_data_from_gsheet(gsheet_url)
-            if df is not None:
-                st.session_state['raw_data'] = df
+        if 'raw_data' not in st.session_state or st.sidebar.button("🔄 Tải lại dữ liệu"):
+            with st.spinner("Đang tải dữ liệu từ Google Sheets..."):
+                df = load_data_from_gsheet(gsheet_url)
+                if df is not None:
+                    st.session_state['raw_data'] = df
+                    st.session_state.pop('scored_data', None) # Clear old scores on reload
+                    st.rerun()
 
     # --- Application Content ---
     if 'raw_data' in st.session_state:
