@@ -1,0 +1,7 @@
+streamlit
+pandas
+google-generativeai
+gspread
+oauth2client
+openpyxl
+python-dotenv
