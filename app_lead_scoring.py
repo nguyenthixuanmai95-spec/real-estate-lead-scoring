@@ -49,6 +49,66 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+# --- RULE-BASED SCORING LOGIC (NO API KEY) ---
+def rule_based_scoring(df):
+    results = []
+    
+    vip_keywords = [
+        "20 tỷ", "tài chính mạnh", "không thành vấn đề", 
+        "Biệt thự đơn lập", "Penthouse", "Shophouse", "Quỹ đất công nghiệp", "Sàn văn phòng diện tích lớn",
+        "Quận 1", "Ven sông", "Vinhomes Ocean Park", "Phú Mỹ Hưng",
+        "Chủ doanh nghiệp", "Nhà đầu tư chuyên nghiệp", "Mua sỉ", "Mua số lượng lớn",
+        "Pháp lý chuẩn", "Sổ hồng riêng", "Gặp trực tiếp chủ đầu tư"
+    ]
+    
+    junk_keywords = [
+        "Nhầm số", "Không có nhu cầu", "Dữ liệu cũ", "Nhầm ngành",
+        "Hỏi giá cho vui", "Chưa có ý định mua", "Thái độ không hợp tác",
+        "Bảo hiểm", "Vay vốn", "Mời chào dịch vụ",
+        "Thuê bao", "Không bắt máy", "Không phản hồi Zalo"
+    ]
+
+    for idx, row in df.iterrows():
+        score = 0
+        reasons = []
+        desc = str(row['nhu_cau_mo_ta']).lower()
+        
+        # Check VIP
+        for kw in vip_keywords:
+            if kw.lower() in desc:
+                score += 50
+                reasons.append(f"Khớp từ khóa VIP: {kw}")
+                break # Only add 50 once for VIP status usually, or could be cumulative
+        
+        # Check Junk
+        for kw in junk_keywords:
+            if kw.lower() in desc:
+                score -= 50
+                reasons.append(f"Khớp dấu hiệu Rác: {kw}")
+                break
+        
+        # Check Unrealistic (Simple logic)
+        if "quận 1" in desc and ("1 tỷ" in desc or "2 tỷ" in desc):
+            score -= 50
+            reasons.append("Yêu cầu phi thực tế (Quận 1 giá rẻ)")
+
+        # Classification
+        if score >= 50:
+            phan_loai = "VIP"
+        elif score < 0:
+            phan_loai = "Rác"
+        else:
+            phan_loai = "Tiềm năng"
+            
+        results.append({
+            "diem_tiem_nang": score,
+            "phan_loai": phan_loai,
+            "ly_do_cham_diem": "; ".join(reasons) if reasons else "Khách hàng tầm trung"
+        })
+        
+    res_df = pd.DataFrame(results)
+    return pd.concat([df, res_df], axis=1)
+
 # --- AI SCORING LOGIC ---
 def get_ai_score(api_key, leads_df, skill_content):
     if not api_key:
@@ -106,85 +166,108 @@ def get_ai_score(api_key, leads_df, skill_content):
 
 # --- MAIN APP ---
 def main():
-    st.title("🚀 AI Lead Scoring & Automation System")
-    st.subheader("Hệ thống chấm điểm khách hàng tiềm năng - Bất Động Sản")
+    st.markdown('<h1 style="color: #1E3A8A;">🏘️ Hệ thống AI Lead Scoring & Automation</h1>', unsafe_allow_html=True)
+    st.markdown('<p style="font-size: 1.2rem; color: #4B5563;">Giải pháp tự động phân loại khách hàng tiềm năng cho ngành Bất Động Sản</p>', unsafe_allow_html=True)
 
     # --- Sidebar ---
     with st.sidebar:
-        st.header("⚙️ Cấu hình")
-        api_key = st.text_input("Gemini API Key", type="password", help="Lấy tại https://aistudio.google.com/app/apikey")
-        gsheet_url = st.text_input("Google Sheet URL", "https://docs.google.com/spreadsheets/d/1StcpiSKHKYevnM2Jjqt_3KH90vld-ykSiMaRwteju6w/edit?gid=0#gid=0")
+        st.image("https://img.icons8.com/fluency/96/artificial-intelligence.png", width=80)
+        st.header("⚙️ Cấu hình Hệ thống")
         
-        if st.button("🔄 Tải dữ liệu"):
-            try:
-                # Convert share link to export link
-                csv_url = gsheet_url.replace("/edit?gid=", "/export?format=csv&gid=").split("#")[0]
-                if "/edit" in csv_url and "/export" not in csv_url:
-                    csv_url = gsheet_url.replace("/edit", "/export?format=csv")
-                
+        gsheet_url = st.text_input("🔗 Google Sheet URL", "https://docs.google.com/spreadsheets/d/1StcpiSKHKYevnM2Jjqt_3KH90vld-ykSiMaRwteju6w/edit?gid=0#gid=0")
+        
+        with st.expander("🛠️ Cài đặt nâng cao (AI Gemini)"):
+            api_key = st.text_input("Gemini API Key", type="password", help="Chỉ điền nếu muốn dùng AI phân tích sâu hơn")
+            
+        st.divider()
+        st.info("💡 **Mẹo:** Hệ thống mặc định sử dụng bộ quy tắc nghiệp vụ (Rule-based) để chấm điểm ngay lập tức mà không cần API Key.")
+
+    # --- Data Loading Logic ---
+    if gsheet_url:
+        try:
+            # Tự động tải dữ liệu khi có URL
+            csv_url = gsheet_url.replace("/edit?gid=", "/export?format=csv&gid=").split("#")[0]
+            if "/edit" in csv_url and "/export" not in csv_url:
+                csv_url = gsheet_url.replace("/edit", "/export?format=csv")
+            
+            if 'raw_data' not in st.session_state:
                 df = pd.read_csv(csv_url)
                 st.session_state['raw_data'] = df
-                st.success("Tải dữ liệu thành công!")
-            except Exception as e:
-                st.error(f"Không thể tải dữ liệu: {e}")
+        except Exception as e:
+            st.error(f"⚠️ Lỗi kết nối Google Sheets: {e}")
 
     # --- Application Content ---
     if 'raw_data' in st.session_state:
         df = st.session_state['raw_data']
         
-        col1, col2, col3 = st.columns(3)
-        col1.markdown(f'<div class="metric-card"><h3>Tổng Lead</h3><h2>{len(df)}</h2></div>', unsafe_allow_html=True)
+        # Dashboard Overview
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            st.markdown(f'<div class="metric-card"><h3>Tổng số Lead</h3><h2 style="color: #2563EB;">{len(df)}</h2></div>', unsafe_allow_html=True)
         
-        st.write("### 📋 Dữ liệu thô từ Google Sheets")
-        st.dataframe(df, use_container_width=True)
+        st.write("### 📋 Danh sách khách hàng mới")
+        st.dataframe(df, use_container_width=True, height=300)
 
-        if st.button("🧠 Chạy AI Chấm Điểm"):
-            with open("lead_scoring_skill.md", "r", encoding="utf-8") as f:
-                skill_content = f.read()
-            
-            scored_df = get_ai_score(api_key, df, skill_content)
-            if scored_df is not None:
+        # Action Buttons
+        col_btn1, col_btn2 = st.columns(2)
+        
+        with col_btn1:
+            if st.button("⚡ Chấm Điểm Nhanh (Quy Tắc)", use_container_width=True):
+                scored_df = rule_based_scoring(df)
                 st.session_state['scored_data'] = scored_df
-                st.success("Đã chấm điểm xong!")
+                st.success("✅ Đã hoàn thành chấm điểm quy tắc!")
 
+        with col_btn2:
+            if st.button("🧠 Chấm Điểm Chuyên Sâu (AI)", use_container_width=True):
+                if not api_key:
+                    st.warning("⚠️ Vui lòng nhập Gemini API Key trong phần 'Cài đặt nâng cao' để dùng tính năng này.")
+                else:
+                    with open("lead_scoring_skill.md", "r", encoding="utf-8") as f:
+                        skill_content = f.read()
+                    scored_df = get_ai_score(api_key, df, skill_content)
+                    if scored_df is not None:
+                        st.session_state['scored_data'] = scored_df
+                        st.success("✅ Đã hoàn thành chấm điểm bằng AI!")
+
+    # --- Results & Review ---
     if 'scored_data' in st.session_state:
         st.divider()
-        st.write("### 🏆 Kết quả Chấm Điểm (AI + Human Review)")
+        st.write("### 🏆 Kết quả Phân Loại & Chấm Điểm")
+        st.caption("Bạn có thể chỉnh sửa trực tiếp vào bảng bên dưới để điều chỉnh kết quả nếu cần (Human-in-the-loop).")
         
-        # Human-in-the-loop: Editable data editor
+        # Highlighted Data Editor
         edited_df = st.data_editor(
             st.session_state['scored_data'],
             use_container_width=True,
             num_rows="dynamic",
             column_config={
-                "diem_tiem_nang": st.column_config.NumberColumn("Điểm", format="%d"),
+                "diem_tiem_nang": st.column_config.NumberColumn("Điểm", format="%d", help="Điểm tiềm năng (0-100)"),
                 "phan_loai": st.column_config.SelectboxColumn("Phân loại", options=["VIP", "Tiềm năng", "Rác"]),
+                "ly_do_cham_diem": st.column_config.TextColumn("Lý do/Ghi chú", width="large")
             }
         )
         st.session_state['scored_data'] = edited_df
 
         # --- Statistics & Export ---
-        st.divider()
-        c1, c2 = st.columns([2, 1])
+        st.write("#### 📊 Thống kê & Báo cáo")
+        c_stat, c_export = st.columns([2, 1])
         
-        with c1:
-            st.write("#### Phân bổ chất lượng Lead")
+        with c_stat:
             summary = edited_df['phan_loai'].value_counts()
             st.bar_chart(summary)
             
-        with c2:
-            st.write("#### 📤 Xuất dữ liệu")
+        with c_export:
+            st.write("#### 📤 Xuất dữ liệu Bàn giao")
             
             # Export to Excel
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
-                edited_df.to_excel(writer, index=False, sheet_name='Lead_Scoring_Results')
+                edited_df.to_excel(writer, index=False, sheet_name='Bao_cao_Lead_Scoring')
             processed_data = output.getvalue()
             
             st.download_button(
-                label="📥 Tải file Excel (.xlsx)",
+                label="📥 Tải file Excel Bàn Giao (.xlsx)",
                 data=processed_data,
-                file_name="lead_scoring_results.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
