@@ -196,18 +196,26 @@ def main():
             
             # Ưu tiên lấy từ Secrets (cho Cloud)
             if "gcp_service_account" in st.secrets:
-                creds_info = json.loads(st.secrets["gcp_service_account"])
+                raw_creds = st.secrets["gcp_service_account"]
+                
+                # Chuyển đổi từ AttrDict hoặc chuỗi JSON sang dict chuẩn
+                if isinstance(raw_creds, str):
+                    creds_info = json.loads(raw_creds)
+                else:
+                    # Chuyển AttrDict sang dict thực thụ
+                    creds_info = dict(raw_creds)
+            
             # Fallback lấy từ file local
             elif os.path.exists("credentials.json"):
                 with open("credentials.json", "r") as f:
                     creds_info = json.load(f)
             
             if creds_info:
-                # Fix lỗi định dạng private_key phổ biến
-                if 'private_key' in creds_info:
-                    creds_info['private_key'] = creds_info['private_key'].replace('\\n', '\n')
+                # Đảm bảo các trường thông tin là chuỗi và xử lý ký tự xuống dòng trong private_key
+                # Đây là bước quan trọng nhất để tránh lỗi "Invalid JWT Signature"
+                info_dict = {k: str(v).replace('\\n', '\n') if k == 'private_key' else v for k, v in creds_info.items()}
                 
-                creds = service_account.Credentials.from_service_account_info(creds_info, scopes=scope)
+                creds = service_account.Credentials.from_service_account_info(info_dict, scopes=scope)
                 client = gspread.authorize(creds)
                 
                 # Trích xuất ID từ URL
